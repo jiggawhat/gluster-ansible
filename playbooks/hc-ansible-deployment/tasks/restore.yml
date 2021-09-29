@@ -39,6 +39,36 @@
 
     when: nbde_setup is defined and nbde_setup
 
+    - name: Restore in the case of ssl files in backup
+    block:
+      - name: check for ssl enabled
+        stat:
+          path: "{{ backup_dir }}/glusterd/secureaccess"
+        register: ssl_enabled
+    
+      - name: restore secureaccess if ssl enabled
+        file:
+          path: /var/lib/glusterd/secureaccess
+          state: touch
+          mode: '0644'
+          owner: root
+          group: root
+        when: ssl_enabled.stat.exists
+    
+      - name: Restore ssl keys and certs, if available
+        copy: 
+          src: "{{ backup_dir }}"/etc/ssl/{{ item }}
+          dest: /etc/ssl/
+          mode: '0644'
+          owner: root
+          group: root
+        remote_src: yes
+        when: ssl_enabled.stat.exists
+        loop:
+          - glusterfs.pem
+          - glusterfs.key
+          - glusterfs.ca
+  
   - name: Check if vdo conf file exists
     stat:
       path: "{{backup_dir}}/vdoconf.yml"
@@ -104,6 +134,9 @@
   - name: Apply SELinux Labels on these mount points
     shell: semanage fcontext -a -t glusterd_brick_t "{{ item }}"
     with_items: "{{ glustermounts.stdout_lines }}"
+    # allow a second run if already labeled
+    register: selinux_label
+    failed_when: selinux_label.rc != 0 and 'already defined' not in selinux_label.stderr
 
   - name: Restore context on the mount points
     shell: restorecon -Rv "{{ item }}"
@@ -142,6 +175,8 @@
           path: /var/lib/glusterd/glusterd.info
           regex: UUID
           line: "{{uuidres.stdout}}"
+          #file doesn't exist after a fresh build, and we haven't restored it, so create it or fail
+          create: yes
 
       - name: Check for the presence of peers directory
         stat:
